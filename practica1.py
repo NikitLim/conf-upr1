@@ -174,6 +174,12 @@ def run_cmd(cmd, args):
         return None, cmd_uniq(args)
     if cmd == 'clear':
         return None, cmd_clear(args)
+    if cmd == 'mkdir':
+        return None, cmd_mkdir(args)
+    if cmd == 'chown':
+        return None, cmd_chown(args)
+    if cmd == 'help':
+        return None, cmd_help(args)
     print(f'{cmd}: команда не найдена')
     return None, 1
 
@@ -215,6 +221,64 @@ def repl():
         res, code = run_cmd(cmd, args)
         if res == 'exit':
             break
+
+def cmd_mkdir(args):
+    if not args:
+        print("mkdir: требуется путь")
+        return 1
+    path = args[0]
+    p = norm_path(path)
+    parent_path = '/' if p.count('/') == 1 else '/' + '/'.join(p.strip('/').split('/')[:-1])
+    parent = get_dir(parent_path)
+    if parent is None:
+        print(f"mkdir: не существует родительского каталога: {parent_path}")
+        return 1
+    name = p.strip('/').split('/')[-1]
+    if name in parent:
+        print(f"mkdir: {p}: уже существует")
+        return 1
+    parent[name] = {}
+    return 0
+
+
+def cmd_chown(args):
+    if len(args) < 2:
+        print("chown: требуется owner и путь")
+        return 1
+    owner = args[0]
+    path = args[1]
+    node = get_node(path)
+    if node is None:
+        print(f"chown: путь не найден: {path}")
+        return 1
+
+    # создаём поле owner в узле
+    if isinstance(node, dict):
+        node['_owner'] = owner
+    else:
+        new = {'_owner': owner, '_file': node}
+        parent_path = '/' if path.count('/') == 1 else '/' + '/'.join(path.strip('/').split('/')[:-1])
+        parent = get_dir(parent_path)
+        name = path.strip('/').split('/')[-1]
+        parent[name] = new
+
+    return 0
+
+
+def cmd_help(args):
+    print("Доступные команды:")
+    print("  ls [путь]          – список файлов")
+    print("  cd [путь]          – сменить каталог")
+    print("  cat файл           – вывести содержимое файла")
+    print("  uniq файл          – убрать подряд идущие дубликаты строк")
+    print("  uname              – название ОС")
+    print("  clear              – очистить экран")
+    print("  mkdir путь         – создать каталог в VFS")
+    print("  chown user путь    – изменить владельца узла")
+    print("  help               – список команд")
+    print("  exit               – выход из эмулятора")
+    return 0
+
 
 def main():
     parser = argparse.ArgumentParser()
