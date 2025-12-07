@@ -3,6 +3,7 @@ import csv
 import getpass
 import socket
 import argparse
+import platform
 
 vfs = {}
 cwd = '/'
@@ -14,21 +15,71 @@ def load_vfs(path):
         with open(path, newline='', encoding='utf8') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                parts = row['path'].strip('/').split('/')
+                p = row['path'].strip('/')
+                parts = [] if p == '' else p.split('/')
                 d = vfs['/']
-                if parts == ['']:
+                for seg in parts[:-1]:
+                    if seg not in d:
+                        d[seg] = {}
+                    d = d[seg]
+                if parts == []:
                     continue
-                for p in parts[:-1]:
-                    if p not in d:
-                        d[p] = {}
-                    d = d[p]
                 name = parts[-1]
                 if row['type'] == 'dir':
                     d[name] = {}
                 else:
-                    d[name] = base64.b64decode(row['content']) if row['content'] else b''
+                    d[name] = base64.b64decode(row['content']) if row.get('content') else b''
     except Exception as e:
         print(f'Ошибка при загрузке VFS: {e}')
+
+def norm_path(path):
+    if not path:
+        return cwd
+    if path.startswith('/'):
+        cur = '/'
+        parts = path.strip('/').split('/')
+    else:
+        cur = cwd
+        if cur == '/':
+            parts = path.strip('/').split('/')
+        else:
+            parts = (cur.strip('/') + '/' + path.strip('/')).split('/')
+    out = []
+    for p in parts:
+        if p == '' or p == '.':
+            continue
+        if p == '..':
+            if out:
+                out.pop()
+            continue
+        out.append(p)
+    return '/' + '/'.join(out) if out else '/'
+
+def get_dir(path):
+    p = norm_path(path)
+    if p == '/':
+        return vfs['/']
+    parts = p.strip('/').split('/')
+    d = vfs['/']
+    for seg in parts:
+        if seg in d and isinstance(d[seg], dict):
+            d = d[seg]
+        else:
+            return None
+    return d
+
+def get_node(path):
+    p = norm_path(path)
+    if p == '/':
+        return vfs['/']
+    parts = p.strip('/').split('/')
+    d = vfs['/']
+    for seg in parts:
+        if seg in d:
+            d = d[seg]
+        else:
+            return None
+    return d
 
 def prompt():
     u = getpass.getuser()
@@ -36,61 +87,93 @@ def prompt():
     p = cwd if cwd != '/' else '~'
     return f'{u}@{h}:{p}$ '
 
-def get_dir(path):
-    parts = path.strip('/').split('/')
-    d = vfs['/']
-    if path == '/':
-        return d
-    for p in parts:
-        if p in d and isinstance(d[p], dict):
-            d = d[p]
-        else:
-            return None
-    return d
+def cmd_ls(args):
+    path = args[0] if args else cwd
+    node = get_node(path)
+    if node is None:
+        print(f'ls: нет такого каталога: {path}')
+        return 1
+    if isinstance(node, bytes):
+        print(path)
+        return 0
+    names = sorted(node.keys())
+    print(' '.join(names))
+    return 0
+
+def cmd_cd(args):
+    global cwd
+    target = args[0] if args else '/'
+    p = norm_path(target)
+    node = get_dir(p)
+    if node is None:
+        return 1
+    cwd = p
+    return 0
+
+def cmd_cat(args):
+    if not args:
+        print('cat: отсутствует аргумент')
+        return 1
+    path = args[0]
+    node = get_node(path)
+    if node is None:
+        print(f'cat: файл не найден: {path}')
+        return 1
+    if isinstance(node, dict):
+        print(f'cat: {path}: это каталог')
+        return 1
+    try:
+        print(node.decode('utf8'))
+    except Exception:
+        print(node)
+    return 0
+
+def cmd_uname(args):
+    print(platform.system())
+    return 0
+
+def cmd_uniq(args):
+    if not args:
+        print('uniq: требуется файл')
+        return 1
+    path = args[0]
+    node = get_node(path)
+    if node is None or isinstance(node, dict):
+        print(f'uniq: файл не найден: {path}')
+        return 1
+    try:
+        s = node.decode('utf8').splitlines()
+    except Exception:
+        s = [line.decode('utf8', errors='replace') for line in node.splitlines()]
+    out = []
+    prev = None
+    for line in s:
+        if line != prev:
+            out.append(line)
+        prev = line
+    for line in out:
+        print(line)
+    return 0
+
+def cmd_clear(args):
+    print("\033c", end='')
+    return 0
 
 def run_cmd(cmd, args):
-    global cwd
     if cmd == 'exit':
         return 'exit', 0
     if cmd == 'ls':
-        path = args[0] if args else cwd
-        d = get_dir(path)
-        if d is None:
-            print(f'ls: нет такого каталога: {path}')
-            return None, 1
-        print(' '.join(d.keys()))
-        return None, 0
+        return None, cmd_ls(args)
     if cmd == 'cd':
-        path = args[0] if args else '/'
-        if path == '~':
-            cwd = '/'
-            return None, 0
-        d = get_dir(path)
-        if d is None:
-            print(f'cd: нет такого каталога: {path}')
-            return None, 1
-        cwd = path if path.startswith('/') else '/' + path
-        return None, 0
+        return None, cmd_cd(args)
     if cmd == 'cat':
-        if not args:
-            print('cat: отсутствует аргумент')
-            return None, 1
-        path = args[0]
-        parts = path.strip('/').split('/')
-        d = vfs['/']
-        for p in parts[:-1]:
-            if p in d and isinstance(d[p], dict):
-                d = d[p]
-            else:
-                print(f'cat: файл не найден: {path}')
-                return None, 1
-        name = parts[-1]
-        if name in d and isinstance(d[name], bytes):
-            print(d[name].decode('utf8'))
-            return None, 0
-        else:
-            print(f'cat: файл не найден: {path}')
-            return None, 1
+        return None, cmd_cat(args)
+    if cmd == 'uname':
+        return None, cmd_uname(args)
+    if cmd == 'uniq':
+        return None, cmd_uniq(args)
+    if cmd == 'clear':
+        return None, cmd_clear(args)
     print(f'{cmd}: команда не найдена')
     return None, 1
 
@@ -98,8 +181,8 @@ def run_script(script_path):
     try:
         with open(script_path, encoding='utf8') as f:
             for line in f:
-                s = line.strip()
-                if not s:
+                s = line.rstrip('\n')
+                if not s or s.strip().startswith('#'):
                     continue
                 print(prompt() + s)
                 parts = s.split()
